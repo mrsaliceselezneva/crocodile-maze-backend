@@ -28,7 +28,10 @@ INSTALLED_APPS = [
     "core.apps.CoreConfig",
     "rest_framework",
     "drf_spectacular",
+    "users.apps.UsersConfig",
 ]
+
+AUTH_USER_MODEL = "users.User"
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
