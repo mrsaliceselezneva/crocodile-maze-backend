@@ -30,6 +30,5 @@ class User(AbstractUser):
         Role,
         on_delete=models.PROTECT,
         related_name="assigned_users",
-        null=True,
     )
     objects = MazeUserManager()
