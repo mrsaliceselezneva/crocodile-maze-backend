@@ -2,6 +2,7 @@ from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from users.models import User, Role
 
@@ -60,7 +61,9 @@ class LoginTests(TestCase):
         )
 
         client = Client(enforce_csrf_checks=True)
-        client.get("/admin/login/")
+        csrf_response = client.get("/api/auth/csrf/")
+        self.assertEqual(csrf_response.status_code, 204)
+        self.assertIn("csrftoken", csrf_response.cookies)
         response = client.post(
             "/api/auth/login/",
             {"username": "test_admin", "password": password},
@@ -100,3 +103,27 @@ class LoginTests(TestCase):
         client.cookies["refresh"] = old_refresh
         repeated = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(repeated.status_code, 401)
+
+    def test_logout_revokes_refresh_and_ends_session(self):
+        student = User.objects.create_user(
+            username="logout_student",
+            role=Role.objects.get(code=Role.Code.STUDENT),
+        )
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(student)
+        client.get("/api/auth/csrf/")
+        csrf = client.cookies["csrftoken"].value
+        saved_refresh = str(RefreshToken.for_user(student))
+        client.cookies["refresh"] = saved_refresh
+
+        self.assertEqual(client.post("/api/auth/logout/").status_code, 403)
+
+        response = client.post("/api/auth/logout/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.cookies["refresh"]["max-age"], 0)
+        self.assertEqual(response.cookies["refresh"]["path"], "/api/auth/")
+        self.assertEqual(client.get("/api/auth/me/").status_code, 401)
+
+        client.cookies["refresh"] = saved_refresh
+        retry = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(retry.status_code, 401)

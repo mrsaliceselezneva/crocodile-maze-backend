@@ -1,8 +1,10 @@
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth import logout as django_logout
 from django.db import transaction
-from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from drf_spectacular.utils import extend_schema
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -63,6 +65,15 @@ def login_view(request):
     return token_response(access=str(refresh.access_token), refresh=str(refresh))
 
 
+@extend_schema(summary="Получить CSRF-cookie", responses={204: None})
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def csrf_cookie_view(request):
+    return Response(status=204, headers={"Cache-Control": "no-store"})
+
+
 @extend_schema(summary="Обновить токены", request=None)
 @api_view(["POST"])
 @authentication_classes([])
@@ -90,3 +101,28 @@ def refresh_view(request):
 
     tokens = serializer.validated_data
     return token_response(access=tokens["access"], refresh=tokens["refresh"])
+
+
+@extend_schema(summary="Выйти из аккаунта", request=None, responses={204: None})
+@api_view(["POST"])
+@authentication_classes([SessionAuthentication])
+@permission_classes([AllowAny])
+@csrf_protect
+def logout_view(request):
+    raw_refresh = request.COOKIES.get("refresh")
+    if raw_refresh:
+        try:
+            token = RefreshToken(raw_refresh)
+            with transaction.atomic():
+                OutstandingToken.objects.select_for_update().get(
+                    jti=token[api_settings.JTI_CLAIM]
+                )
+                token.blacklist()
+        except (TokenError, OutstandingToken.DoesNotExist):
+            # Повторный выход тоже должен очистить cookie.
+            pass
+
+    django_logout(request)
+    response = Response(status=204, headers={"Cache-Control": "no-store"})
+    response.delete_cookie("refresh", path="/api/auth/", samesite="Lax")
+    return response
