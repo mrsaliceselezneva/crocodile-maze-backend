@@ -14,3 +14,11 @@ class CurrentUserSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
     password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class AccessTokenResponseSerializer(serializers.Serializer):
+    access = serializers.CharField(read_only=True)
+
+
+class DetailErrorSerializer(serializers.Serializer):
+    detail = serializers.CharField()

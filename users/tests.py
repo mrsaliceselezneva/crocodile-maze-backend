@@ -1,7 +1,11 @@
+from datetime import timedelta
+from unittest.mock import patch
+
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from users.models import User, Role
@@ -127,3 +131,62 @@ class LoginTests(TestCase):
         client.cookies["refresh"] = saved_refresh
         retry = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(retry.status_code, 401)
+
+    def test_inactive_student_cannot_log_in(self):
+        password = "MazeTest42!"
+        student = User.objects.create_user(
+            username="inactive_student",
+            password=password,
+            is_active=False,
+            role=Role.objects.get(code=Role.Code.STUDENT),
+        )
+
+        client = Client(enforce_csrf_checks=True)
+        client.get("/api/auth/csrf/")
+        response = client.post(
+            "/api/auth/login/",
+            {"username": student.username, "password": password},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value,
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("access", response.json())
+        self.assertNotIn("refresh", response.cookies)
+
+    def test_token_expiration(self):
+        student = User.objects.create_user(
+            username="expiry_student",
+            role=Role.objects.get(code=Role.Code.STUDENT),
+        )
+        client = Client(enforce_csrf_checks=True)
+        client.get("/api/auth/csrf/")
+        csrf = client.cookies["csrftoken"].value
+        now = timezone.now()
+
+        # Через 16 минут access уже истёк, а refresh ещё действует.
+        with patch("rest_framework_simplejwt.tokens.aware_utcnow",
+                   return_value=now - timedelta(minutes=16)):
+            refresh = RefreshToken.for_user(student)
+            access = str(refresh.access_token)
+
+        profile = client.get("/api/auth/me/", HTTP_AUTHORIZATION=f"Bearer {access}")
+        self.assertEqual(profile.status_code, 401)
+
+        client.cookies["refresh"] = str(refresh)
+        renewed = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(renewed.status_code, 200)
+
+        new_refresh = RefreshToken(renewed.cookies["refresh"].value)
+        self.assertGreaterEqual(new_refresh["iat"], int(now.timestamp()))
+        self.assertEqual(new_refresh["exp"] - new_refresh["iat"], 31 * 24 * 60 * 60)
+
+        # После 32 дней без обновления истёк и сам refresh.
+        with patch("rest_framework_simplejwt.tokens.aware_utcnow",
+                   return_value=now - timedelta(days=32)):
+            expired_refresh = RefreshToken.for_user(student)
+
+        client.cookies["refresh"] = str(expired_refresh)
+        denied = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(denied.status_code, 401)
+        self.assertNotIn("access", denied.json())
