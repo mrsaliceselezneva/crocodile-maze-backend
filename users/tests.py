@@ -1,9 +1,9 @@
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Role, User
+from users.models import User, Role
 
 
 class SuperuserTests(TestCase):
@@ -48,3 +48,31 @@ class CurrentUserTests(TestCase):
             response.json(),
             {"id": student.pk, "username": "maze_runner", "role": "STUDENT"},
         )
+
+
+class LoginTests(TestCase):
+    def test_login_returns_access_and_sets_refresh_cookie(self):
+        password = "MazeTest42!"
+        User.objects.create_superuser(
+            username="test_admin",
+            email="admin@example.com",
+            password=password,
+        )
+
+        client = Client(enforce_csrf_checks=True)
+        client.get("/admin/login/")
+        response = client.post(
+            "/api/auth/login/",
+            {"username": "test_admin", "password": password},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["access"])
+        self.assertNotIn("refresh", response.json())
+
+        refresh = response.cookies["refresh"]
+        self.assertTrue(refresh.value)
+        self.assertTrue(refresh["httponly"])
+        self.assertEqual(refresh["max-age"], 31 * 24 * 60 * 60)
