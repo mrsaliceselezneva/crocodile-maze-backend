@@ -86,3 +86,17 @@ class LoginTests(TestCase):
         self.assertEqual(profile.status_code, 200)
         self.assertEqual(profile.json()["username"], "test_admin")
         self.assertEqual(profile.json()["role"], "ADMIN")
+
+        old_refresh = refresh.value
+        csrf = client.cookies["csrftoken"].value
+
+        renewed = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(renewed.status_code, 200)
+        self.assertTrue(renewed.json()["access"])
+        self.assertNotIn("refresh", renewed.json())
+        self.assertNotEqual(renewed.cookies["refresh"].value, old_refresh)
+        self.assertEqual(renewed.cookies["refresh"]["max-age"], 31 * 24 * 60 * 60)
+
+        client.cookies["refresh"] = old_refresh
+        repeated = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(repeated.status_code, 401)
