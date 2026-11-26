@@ -32,7 +32,7 @@ class CurrentUserTests(TestCase):
     def test_anonymous_user_cannot_read_profile(self):
         response = self.client.get(reverse("current-user"))
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_student_can_read_own_profile(self):
         student = User.objects.create_user(
@@ -76,3 +76,13 @@ class LoginTests(TestCase):
         self.assertTrue(refresh.value)
         self.assertTrue(refresh["httponly"])
         self.assertEqual(refresh["max-age"], 31 * 24 * 60 * 60)
+
+        access = response.json()["access"]
+        profile = Client().get(
+            "/api/auth/me/",
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()["username"], "test_admin")
+        self.assertEqual(profile.json()["role"], "ADMIN")
