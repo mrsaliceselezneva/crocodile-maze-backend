@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from users.models import User, Role
+from users.serializers import RegistrationSerializer
 
 
 class SuperuserTests(TestCase):
@@ -190,3 +191,154 @@ class LoginTests(TestCase):
         denied = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(denied.status_code, 401)
         self.assertNotIn("access", denied.json())
+
+
+class UsernameTests(TestCase):
+    def test_handle_is_unique_regardless_of_case(self):
+        guest = Role.objects.get(code=Role.Code.GUEST)
+        User.objects.create_user(username="MazeRunner", role=guest)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.create_user(username="mazerunner", role=guest)
+
+
+class RegistrationTests(TestCase):
+    def test_registration_creates_guest_and_hashes_password(self):
+        password = "Quartz47!"
+        form = RegistrationSerializer(data={
+            "first_name": "Иван",
+            "last_name": "Петров",
+            "username": "MazeRunner",
+            "password": password,
+            "role": "ADMIN",
+            "is_staff": True,
+            "is_superuser": True,
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        user.refresh_from_db()
+
+        self.assertEqual(user.role.code, Role.Code.GUEST)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertNotEqual(user.password, password)
+        self.assertTrue(user.check_password(password))
+        self.assertNotIn("password", form.data)
+
+    def test_guest_can_register_log_in_and_read_profile(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("csrf-cookie"))
+        csrf = client.cookies["csrftoken"].value
+        credentials = {"username": "MazeRunner", "password": "Quartz47!"}
+
+        registered = client.post(
+            reverse("register"),
+            {**credentials, "first_name": "Иван", "last_name": "Петров"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(registered.status_code, 201)
+        self.assertEqual(registered.json()["role"], "GUEST")
+
+        login = client.post(
+            reverse("login"),
+            credentials,
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(login.status_code, 200)
+
+        access = login.json()["access"]
+        profile = Client().get(
+            reverse("current-user"),
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json(), registered.json())
+
+        user_id = registered.json()["id"]
+        approve_url = reverse("approve-registration-request", args=[user_id])
+        guest_auth = {"HTTP_AUTHORIZATION": f"Bearer {access}"}
+
+        denied = Client().post(approve_url, **guest_auth)
+        self.assertEqual(denied.status_code, 403)
+
+        admin = User.objects.create_superuser(username="approval_admin")
+        admin_access = str(RefreshToken.for_user(admin).access_token)
+        approved = Client().post(
+            approve_url,
+            HTTP_AUTHORIZATION=f"Bearer {admin_access}",
+        )
+        self.assertEqual(approved.status_code, 204)
+
+        profile = Client().get(reverse("current-user"), **guest_auth)
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()["id"], user_id)
+        self.assertEqual(profile.json()["role"], "STUDENT")
+
+    def test_only_admin_can_manage_registration_requests(self):
+        guest = User.objects.create_user(
+            username="pending_guest",
+            first_name="Иван",
+            last_name="Петров",
+            role=Role.objects.get(code=Role.Code.GUEST),
+        )
+        student = User.objects.create_user(
+            username="approved_student",
+            role=Role.objects.get(code=Role.Code.STUDENT),
+        )
+        admin = User.objects.create_superuser(username="requests_admin")
+
+        list_url = reverse("registration-request-list")
+        approve_url = reverse("approve-registration-request", args=[guest.pk])
+
+        for user, expected_status in [(None, 401), (guest, 403), (student, 403)]:
+            with self.subTest(user=user):
+                client = Client()
+                if user is not None:
+                    client.force_login(user)
+
+                self.assertEqual(client.get(list_url).status_code, expected_status)
+                self.assertEqual(client.post(approve_url).status_code, expected_status)
+
+        self.client.force_login(admin)
+        response = self.client.get(list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{
+            "id": guest.pk,
+            "username": "pending_guest",
+            "first_name": "Иван",
+            "last_name": "Петров",
+        }])
+
+    def test_registration_rejects_invalid_data(self):
+        url = reverse("register")
+        valid = {
+            "first_name": "Иван",
+            "last_name": "Петров",
+            "username": "MazeRunner",
+            "password": "Quartz47!",
+        }
+        created = self.client.post(url, valid, content_type="application/json")
+        self.assertEqual(created.status_code, 201)
+        user_count = User.objects.count()
+
+        cases = [
+            ("пустая форма", {}, set(valid)),
+            ("занятый хендл", valid, {"username"}),
+            ("другой регистр", {**valid, "username": "mazerunner"}, {"username"}),
+        ]
+
+        for password in (" Quartz47!", "Quartz47! ", "Qua rtz47!", "Quartz47!\t",
+                         "Quartz47!\n", "Quartz47Ж", "Quartz47?"):
+            data = {**valid, "username": "FreeRunner", "password": password}
+            cases.append((repr(password), data, {"password"}))
+
+        for label, data, expected_fields in cases:
+            with self.subTest(case=label):
+                response = self.client.post(url, data, content_type="application/json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(set(response.json()), expected_fields)
+                self.assertEqual(User.objects.count(), user_count)
