@@ -1,11 +1,14 @@
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 
+from django.db.models.functions import Lower
+
 
 class Role(models.Model):
     class Code(models.TextChoices):
         ADMIN = "ADMIN", "Администратор"
         STUDENT = "STUDENT", "Ученик"
+        GUEST = "GUEST", "Гость"
 
     code = models.CharField(
         max_length=16,
@@ -32,3 +35,11 @@ class User(AbstractUser):
         related_name="assigned_users",
     )
     objects = MazeUserManager()
+
+    class Meta(AbstractUser.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                Lower("username"),
+                name="users_username_lower_unique",
+            ),
+        ]

@@ -190,3 +190,12 @@ class LoginTests(TestCase):
         denied = client.post("/api/auth/refresh/", HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(denied.status_code, 401)
         self.assertNotIn("access", denied.json())
+
+
+class UsernameTests(TestCase):
+    def test_handle_is_unique_regardless_of_case(self):
+        guest = Role.objects.get(code=Role.Code.GUEST)
+        User.objects.create_user(username="MazeRunner", role=guest)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.create_user(username="mazerunner", role=guest)
