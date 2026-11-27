@@ -312,3 +312,33 @@ class RegistrationTests(TestCase):
             "first_name": "Иван",
             "last_name": "Петров",
         }])
+
+    def test_registration_rejects_invalid_data(self):
+        url = reverse("register")
+        valid = {
+            "first_name": "Иван",
+            "last_name": "Петров",
+            "username": "MazeRunner",
+            "password": "Quartz47!",
+        }
+        created = self.client.post(url, valid, content_type="application/json")
+        self.assertEqual(created.status_code, 201)
+        user_count = User.objects.count()
+
+        cases = [
+            ("пустая форма", {}, set(valid)),
+            ("занятый хендл", valid, {"username"}),
+            ("другой регистр", {**valid, "username": "mazerunner"}, {"username"}),
+        ]
+
+        for password in (" Quartz47!", "Quartz47! ", "Qua rtz47!", "Quartz47!\t",
+                         "Quartz47!\n", "Quartz47Ж", "Quartz47?"):
+            data = {**valid, "username": "FreeRunner", "password": password}
+            cases.append((repr(password), data, {"password"}))
+
+        for label, data, expected_fields in cases:
+            with self.subTest(case=label):
+                response = self.client.post(url, data, content_type="application/json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(set(response.json()), expected_fields)
+                self.assertEqual(User.objects.count(), user_count)
