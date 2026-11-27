@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from users.models import User, Role
+from users.serializers import RegistrationSerializer
 
 
 class SuperuserTests(TestCase):
@@ -199,3 +200,59 @@ class UsernameTests(TestCase):
 
         with self.assertRaises(IntegrityError), transaction.atomic():
             User.objects.create_user(username="mazerunner", role=guest)
+
+
+class RegistrationTests(TestCase):
+    def test_registration_creates_guest_and_hashes_password(self):
+        password = "Quartz47!"
+        form = RegistrationSerializer(data={
+            "first_name": "Иван",
+            "last_name": "Петров",
+            "username": "MazeRunner",
+            "password": password,
+            "role": "ADMIN",
+            "is_staff": True,
+            "is_superuser": True,
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        user.refresh_from_db()
+
+        self.assertEqual(user.role.code, Role.Code.GUEST)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertNotEqual(user.password, password)
+        self.assertTrue(user.check_password(password))
+        self.assertNotIn("password", form.data)
+
+    def test_guest_can_register_log_in_and_read_profile(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("csrf-cookie"))
+        csrf = client.cookies["csrftoken"].value
+        credentials = {"username": "MazeRunner", "password": "Quartz47!"}
+
+        registered = client.post(
+            reverse("register"),
+            {**credentials, "first_name": "Иван", "last_name": "Петров"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(registered.status_code, 201)
+        self.assertEqual(registered.json()["role"], "GUEST")
+
+        login = client.post(
+            reverse("login"),
+            credentials,
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(login.status_code, 200)
+
+        access = login.json()["access"]
+        profile = Client().get(
+            reverse("current-user"),
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json(), registered.json())

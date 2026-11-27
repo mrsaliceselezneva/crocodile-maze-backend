@@ -17,7 +17,8 @@ from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
-from .serializers import CurrentUserSerializer, LoginSerializer, AccessTokenResponseSerializer, DetailErrorSerializer
+from .serializers import CurrentUserSerializer, LoginSerializer, AccessTokenResponseSerializer, DetailErrorSerializer, \
+    RegistrationSerializer
 
 CSRF_HEADER = OpenApiParameter(
     name="X-CSRFToken",
@@ -106,6 +107,30 @@ def login_view(request):
 
     refresh = RefreshToken.for_user(user)
     return token_response(access=str(refresh.access_token), refresh=str(refresh))
+
+
+@extend_schema(
+    summary="Зарегистрировать гостя",
+    request=RegistrationSerializer,
+    parameters=[CSRF_HEADER],
+    responses={
+        201: CurrentUserSerializer,
+        400: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Ошибка в данных регистрации, например хендл уже занят.",
+        ),
+        (403, "text/html"): CSRF_ERROR,
+    },
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+@csrf_protect
+def register_view(request):
+    serializer = RegistrationSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    user = serializer.save()
+    return Response(CurrentUserSerializer(user).data, status=201)
 
 
 @extend_schema(summary="Получить CSRF-cookie",
