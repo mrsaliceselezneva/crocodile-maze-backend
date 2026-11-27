@@ -1,6 +1,7 @@
 from django.urls import path
 
-from .views import current_user, login_view, refresh_view, csrf_cookie_view, logout_view, register_view
+from .views import current_user, login_view, refresh_view, csrf_cookie_view, logout_view, register_view, \
+    registration_request_list, approve_registration_request
 
 urlpatterns = [
     path("me/", current_user, name="current-user"),
@@ -9,4 +10,10 @@ urlpatterns = [
     path("csrf/", csrf_cookie_view, name="csrf-cookie"),
     path("logout/", logout_view, name="logout"),
     path("register/", register_view, name="register"),
+    path("registration-requests/", registration_request_list, name="registration-request-list"),
+    path(
+        "registration-requests/<int:user_id>/approve/",
+        approve_registration_request,
+        name="approve-registration-request",
+    ),
 ]

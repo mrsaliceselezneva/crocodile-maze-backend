@@ -80,3 +80,9 @@ class AccessTokenResponseSerializer(serializers.Serializer):
 
 class DetailErrorSerializer(serializers.Serializer):
     detail = serializers.CharField()
+
+
+class RegistrationRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("id", "username", "first_name", "last_name")

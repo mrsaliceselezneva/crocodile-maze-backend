@@ -256,3 +256,59 @@ class RegistrationTests(TestCase):
         )
         self.assertEqual(profile.status_code, 200)
         self.assertEqual(profile.json(), registered.json())
+
+        user_id = registered.json()["id"]
+        approve_url = reverse("approve-registration-request", args=[user_id])
+        guest_auth = {"HTTP_AUTHORIZATION": f"Bearer {access}"}
+
+        denied = Client().post(approve_url, **guest_auth)
+        self.assertEqual(denied.status_code, 403)
+
+        admin = User.objects.create_superuser(username="approval_admin")
+        admin_access = str(RefreshToken.for_user(admin).access_token)
+        approved = Client().post(
+            approve_url,
+            HTTP_AUTHORIZATION=f"Bearer {admin_access}",
+        )
+        self.assertEqual(approved.status_code, 204)
+
+        profile = Client().get(reverse("current-user"), **guest_auth)
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()["id"], user_id)
+        self.assertEqual(profile.json()["role"], "STUDENT")
+
+    def test_only_admin_can_manage_registration_requests(self):
+        guest = User.objects.create_user(
+            username="pending_guest",
+            first_name="Иван",
+            last_name="Петров",
+            role=Role.objects.get(code=Role.Code.GUEST),
+        )
+        student = User.objects.create_user(
+            username="approved_student",
+            role=Role.objects.get(code=Role.Code.STUDENT),
+        )
+        admin = User.objects.create_superuser(username="requests_admin")
+
+        list_url = reverse("registration-request-list")
+        approve_url = reverse("approve-registration-request", args=[guest.pk])
+
+        for user, expected_status in [(None, 401), (guest, 403), (student, 403)]:
+            with self.subTest(user=user):
+                client = Client()
+                if user is not None:
+                    client.force_login(user)
+
+                self.assertEqual(client.get(list_url).status_code, expected_status)
+                self.assertEqual(client.post(approve_url).status_code, expected_status)
+
+        self.client.force_login(admin)
+        response = self.client.get(list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{
+            "id": guest.pk,
+            "username": "pending_guest",
+            "first_name": "Иван",
+            "last_name": "Петров",
+        }])
